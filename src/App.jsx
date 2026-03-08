@@ -57,6 +57,66 @@ function buildCalendar(startDate) {
 }
 
 const STORE_KEY = "ug-tracker-v2";
+const VISITOR_KEY = "ug-tracker-visitors";
+const COUNTER_NS = "ugtracker-netlify";
+const COUNTER_NAME = "visits";
+
+// ═══════════════════════════════════════════════════════════
+// VISITOR TRACKING
+// ═══════════════════════════════════════════════════════════
+function useVisitorStats() {
+  const [stats, setStats] = useState({ total: null, today: 0, daily: [] });
+
+  useEffect(() => {
+    // Load local daily visit log
+    let visitLog = {};
+    try {
+      const raw = localStorage.getItem(VISITOR_KEY);
+      if (raw) visitLog = JSON.parse(raw);
+    } catch {}
+
+    const todayStr = todayKey();
+
+    // Record this visit in local daily log
+    const alreadyCounted = sessionStorage.getItem("ug-visit-counted");
+    if (!alreadyCounted) {
+      visitLog[todayStr] = (visitLog[todayStr] || 0) + 1;
+      try {
+        localStorage.setItem(VISITOR_KEY, JSON.stringify(visitLog));
+        sessionStorage.setItem("ug-visit-counted", "1");
+      } catch {}
+    }
+
+    // Build last 7 days data
+    const daily = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dk = toKey(d);
+      daily.push({ day: d.toLocaleDateString("en-IN", { weekday: "short" }), count: visitLog[dk] || 0 });
+    }
+
+    const todayCount = visitLog[todayStr] || 0;
+
+    // Fetch + increment global counter (once per session)
+    const endpoint = alreadyCounted
+      ? `https://api.counterapi.dev/v1/${COUNTER_NS}/${COUNTER_NAME}`
+      : `https://api.counterapi.dev/v1/${COUNTER_NS}/${COUNTER_NAME}/up`;
+
+    fetch(endpoint)
+      .then(r => r.json())
+      .then(data => {
+        setStats({ total: data.count || 0, today: todayCount, daily });
+      })
+      .catch(() => {
+        // Fallback: just use local data
+        const allTimeLocal = Object.values(visitLog).reduce((a, b) => a + b, 0);
+        setStats({ total: allTimeLocal, today: todayCount, daily });
+      });
+  }, []);
+
+  return stats;
+}
 const QUOTES = [
   { text: "The question is not whether you'll be distracted. The question is whether you'll notice, and what you'll do next.", author: "Oliver Burkeman" },
   { text: "You don't rise to the level of your goals, you fall to the level of your systems.", author: "James Clear" },
@@ -413,6 +473,7 @@ function DailyHeatmap({ tasks, C }) {
 function Dashboard({ state, update, segments, today, C }) {
   const [scoringWk, setScoringWk] = useState(null);
   const quote = QUOTES[new Date().getDay() % QUOTES.length];
+  const visitorStats = useVisitorStats();
 
   let elapsed=0, total=0, scored=0, scoreSum=0, currentSem=null;
   if (segments) {
@@ -546,6 +607,45 @@ function Dashboard({ state, update, segments, today, C }) {
           )}
         </Card>
       </div>
+
+      {/* Site Visitors */}
+      <Card C={C} style={{ marginBottom:24 }}>
+        <div style={{ fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.muted, marginBottom:14 }}>
+          Site Analytics
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:16, alignItems:"center" }}>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:28, fontWeight:300, color:C.accent, lineHeight:1 }}>
+              {visitorStats.total !== null ? visitorStats.total : "…"}
+            </div>
+            <div style={{ fontSize:9, letterSpacing:"0.14em", textTransform:"uppercase", color:C.muted, marginTop:6 }}>Total Visits</div>
+          </div>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:28, fontWeight:300, color:"#2563eb", lineHeight:1 }}>
+              {visitorStats.today}
+            </div>
+            <div style={{ fontSize:9, letterSpacing:"0.14em", textTransform:"uppercase", color:C.muted, marginTop:6 }}>Today</div>
+          </div>
+          <div style={{ display:"flex", alignItems:"flex-end", gap:3, height:48 }}>
+            {visitorStats.daily.map((d, i) => {
+              const maxCount = Math.max(...visitorStats.daily.map(x => x.count), 1);
+              const h = Math.max((d.count / maxCount) * 40, 3);
+              return (
+                <div key={i} style={{ textAlign:"center" }}>
+                  <div style={{
+                    width:18, height:h, background: i === 6 ? C.accent : (C.dm ? "#333" : "#d1d5db"),
+                    borderRadius:2, transition:"height 0.3s",
+                  }} title={`${d.day}: ${d.count} visits`} />
+                  <div style={{ fontSize:7, color:C.muted, marginTop:3 }}>{d.day.slice(0,2)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ fontSize:9, color:C.muted, marginTop:12, opacity:0.6 }}>
+          Last 7 days · Tracked per browser session
+        </div>
+      </Card>
 
       {/* Quote */}
       <Card C={C} style={{ textAlign:"center", background: C.dm?"#111":C.accentLight, borderColor: C.dm?"#1a3d1e":"#bbf7d0" }}>
